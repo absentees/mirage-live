@@ -596,11 +596,13 @@
         if (msg.type === "init") {
           try {
             postMessage({ type: "progress", label: "Loading WASM engine…", pct: 5 });
-            importScripts(msg.jsUrl);
-            const [wasmBuf, cactBuf] = await Promise.all([
+            const [jsBuf, wasmBuf, cactBuf] = await Promise.all([
+              fetchCached(msg.jsUrl, "cactus.js"),
               fetchCached(msg.wasmUrl, "cactus.wasm"),
               fetchCached(msg.cactUrl, "mirage.cact")
             ]);
+            const jsText = new TextDecoder().decode(jsBuf);
+            const createCactus = new Function(jsText + "\\nreturn createCactus;")();
             Module = await createCactus({ wasmBinary: new Uint8Array(wasmBuf) });
             const cact = new Uint8Array(cactBuf);
             const ptr = Module._malloc(cact.length);
