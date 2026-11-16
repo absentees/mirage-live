@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Mirage Live — On-Device Vision Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --panel: #13171d;
+      --panel-2: #1a2028;
+      --border: #262f3b;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --accent-dim: rgba(34, 197, 94, 0.16);
+      --warn: #f59e0b;
+      --err: #ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-title {
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-family: var(--mono);
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+    }
+    .dot.ready { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+    .dot.busy { background: var(--warn); animation: pulse 1s infinite; }
+    .dot.err { background: var(--err); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 0;
+      min-height: 0;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+    }
+
+    /* Viewport */
+    .stage-wrap {
+      position: relative;
+      background: #050709;
+      display: flex;
+      flex-direction: column;
+      min-height: 360px;
+    }
+
+    .viewport {
+      position: relative;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      min-height: 320px;
+      max-height: calc(100dvh - 130px);
+    }
+
+    @media (max-width: 900px) {
+      .viewport {
+        min-height: 52dvh;
+        max-height: 62dvh;
+      }
+    }
+
+    video, #stillImg {
+      max-width: 100%;
+      max-height: 100%;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 28px 20px;
+      max-width: 400px;
+    }
+
+    .empty-state h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .empty-state p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    .progress-wrap {
+      width: 100%;
+      max-width: 300px;
+      margin: 12px auto 0;
+      display: none;
+    }
+
+    .progress-bar {
+      height: 6px;
+      background: var(--panel-2);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.15s ease;
+    }
+
+    .progress-label {
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    /* Controls bar */
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 14px;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .btn-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button, .file-btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 13px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+      user-select: none;
+    }
+
+    button:hover:not(:disabled), .file-btn:hover {
+      background: #232b36;
+      border-color: #364354;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #051b0d;
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    button.primary:hover:not(:disabled) {
+      background: #16a34a;
+      border-color: #16a34a;
+    }
+
+    button.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    input[type="file"] { display: none; }
+
+    .toggles {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .toggles label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+
+    .toggles input[type="range"] {
+      width: 76px;
+      accent-color: var(--accent);
+    }
+
+    /* Sidebar inspector */
+    aside {
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      max-height: calc(100dvh - 52px);
+    }
+
+    @media (max-width: 900px) {
+      aside {
+        border-left: none;
+        border-top: 1px solid var(--border);
+        max-height: none;
+      }
+    }
+
+    .section {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    .metric {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .scene-box {
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .chip {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .score {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .ocr-item {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 6px 8px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    pre {
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.45;
+      color: #cbd5e1;
+      background: #090c10;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      overflow-x: auto;
+      max-height: 240px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .error-banner {
+      display: none;
+      margin: 10px 14px 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fecaca;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div>
+        <div class="brand-title">Mirage Live</div>
+        <div class="brand-sub">Cactus Compute · 22 MB 2-bit Vision + OCR + Masks in WebAssembly</div>
+      </div>
+    </div>
+    <div class="status-pill" id="statusPill">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">Initializing…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage-wrap">
+      <div class="error-banner" id="errorBanner"></div>
+      <div class="viewport" id="viewport">
+        <video id="video" autoplay playsinline muted></video>
+        <img id="stillImg" alt="Uploaded frame" />
+        <canvas id="overlay"></canvas>
+
+        <div class="empty-state" id="emptyState">
+          <h2>Point your camera or drop an image</h2>
+          <p>
+            Mirage (51.3M params, 21.6 MB) runs 100% locally in your browser via WebAssembly.
+            No video frames ever leave your device.
+          </p>
+          <div class="progress-wrap" id="progressWrap">
+            <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+            <div class="progress-label" id="progressLabel">Downloading model…</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="btn-group">
+          <button id="camBtn" class="primary">Start Camera</button>
+          <button id="flipBtn" disabled title="Switch front/rear camera">Flip</button>
+          <button id="liveBtn" disabled class="active" title="Toggle continuous real-time recognition">Live: ON</button>
+          <button id="snapBtn" disabled title="Run single pass">Scan Once</button>
+          <label class="file-btn">
+            Upload
+            <input type="file" id="fileInput" accept="image/*" />
+          </label>
+        </div>
+
+        <div class="toggles">
+          <label><input type="checkbox" id="chkBoxes" checked /> Boxes</label>
+          <label><input type="checkbox" id="chkMasks" checked /> Masks</label>
+          <label><input type="checkbox" id="chkText" checked /> OCR</label>
+          <label>
+            Conf <span id="confVal">0.30</span>
+            <input type="range" id="confRange" min="0.10" max="0.80" step="0.05" value="0.30" />
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="section">
+        <div class="section-head">
+          <span class="section-title">Scene</span>
+          <span class="metric" id="latencyMetric">—</span>
+        </div>
+        <div class="scene-box" id="sceneBox">Waiting for model &amp; frame…</div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="section-title">Detected Objects</span>
+          <span class="metric" id="objCount">0</span>
+        </div>
+        <div class="chips" id="objectsList"></div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="section-title">OCR Text</span>
+          <span class="metric" id="textCount">0</span>
+        </div>
+        <div id="textList"></div>
+      </div>
+
+      <div class="section" style="border-bottom: none; flex: 1;">
+        <div class="section-head">
+          <span class="section-title">Raw JSON</span>
+          <button id="copyBtn" style="padding: 3px 8px; font-size: 11px;">Copy</button>
+        </div>
+        <pre id="jsonOut">{}</pre>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const CACTUS_JS_URL = "https://huggingface.co/Cactus-Compute/cactus/resolve/main/releases/4.0.0/wasm/cactus.js";
+    const CACTUS_WASM_URL = "https://huggingface.co/Cactus-Compute/cactus/resolve/main/releases/4.0.0/wasm/cactus.wasm";
+    const MIRAGE_CACT_URL = "https://huggingface.co/Cactus-Compute/mirage/resolve/main/mirage.cact";
+
+    const PALETTE = ["#22c55e", "#38bdf8", "#f59e0b", "#ec4899", "#a855f7", "#14b8a6", "#f97316", "#eab308"];
+
+    const $ = (id) => document.getElementById(id);
+    const video = $("video");
+    const stillImg = $("stillImg");
+    const overlay = $("overlay");
+    const ctx = overlay.getContext("2d");
+    const emptyState = $("emptyState");
+    const progressWrap = $("progressWrap");
+    const progressFill = $("progressFill");
+    const progressLabel = $("progressLabel");
+    const statusDot = $("statusDot");
+    const statusText = $("statusText");
+    const errorBanner = $("errorBanner");
+
+    const camBtn = $("camBtn");
+    const flipBtn = $("flipBtn");
+    const liveBtn = $("liveBtn");
+    const snapBtn = $("snapBtn");
+    const fileInput = $("fileInput");
+    const chkBoxes = $("chkBoxes");
+    const chkMasks = $("chkMasks");
+    const chkText = $("chkText");
+    const confRange = $("confRange");
+    const confVal = $("confVal");
+    const copyBtn = $("copyBtn");
+
+    let stream = null;
+    let facingMode = "environment";
+    let modelReady = false;
+    let inferring = false;
+    let liveMode = true;
+    let lastResult = null;
+    let sourceMode = "none"; // "camera" | "image"
+
+    const capCanvas = document.createElement("canvas");
+    const capCtx = capCanvas.getContext("2d", { willReadFrequently: true });
+
+    function setStatus(state, text) {
+      statusDot.className = "dot " + (state || "");
+      statusText.textContent = text;
+    }
+
+    function showError(msg) {
+      errorBanner.style.display = "block";
+      errorBanner.textContent = msg;
+    }
+
+    // Inline Web Worker so the entire app stays a single HTML file
+    const workerCode = `
+      let Module = null;
+      const enc = new TextEncoder();
+
+      async function fetchCached(url, label) {
+        let cache = null;
+        try { cache = await caches.open("mirage-wasm-v1"); } catch {}
+        if (cache) {
+          const hit = await cache.match(url);
+          if (hit) {
+            postMessage({ type: "progress", label: label + " (cached)", pct: 100 });
+            return await hit.arrayBuffer();
+          }
+        }
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("HTTP " + res.status + " fetching " + label);
+        const total = Number(res.headers.get("content-length") || 0);
+        const reader = res.body.getReader();
+        const chunks = [];
+        let received = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.byteLength;
+          if (total > 0) {
+            postMessage({ type: "progress", label: label + " " + (received / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB", pct: Math.round((received / total) * 100) });
+          }
+        }
+        const buf = new Uint8Array(received);
+        let offset = 0;
+        for (const c of chunks) { buf.set(c, offset); offset += c.byteLength; }
+        if (cache) {
+          try { await cache.put(url, new Response(buf, { headers: { "Content-Type": "application/octet-stream" } })); } catch {}
+        }
+        return buf.buffer;
+      }
+
+      self.onmessage = async (e) => {
+        const msg = e.data;
+        if (msg.type === "init") {
+          try {
+            postMessage({ type: "progress", label: "Loading WASM engine…", pct: 5 });
+            importScripts(msg.jsUrl);
+            const [wasmBuf, cactBuf] = await Promise.all([
+              fetchCached(msg.wasmUrl, "cactus.wasm"),
+              fetchCached(msg.cactUrl, "mirage.cact")
+            ]);
+            Module = await createCactus({ wasmBinary: new Uint8Array(wasmBuf) });
+            const cact = new Uint8Array(cactBuf);
+            const ptr = Module._malloc(cact.length);
+            Module.HEAPU8.set(cact, ptr);
+            const rc = Module._cactus_load(ptr, BigInt(cact.length));
+            Module._free(ptr);
+            if (rc < 0) {
+              throw new Error(Module.UTF8ToString(Module._cactus_last_error()));
+            }
+            postMessage({ type: "ready" });
+          } catch (err) {
+            postMessage({ type: "error", error: err.message || String(err) });
+          }
+        } else if (msg.type === "describe") {
+          if (!Module) return;
+          const t0 = performance.now();
+          const { rgb, width, height, conf } = msg;
+          const rgbPtr = Module._malloc(rgb.byteLength);
+          Module.HEAPU8.set(new Uint8Array(rgb), rgbPtr);
+
+          const opts = JSON.stringify({
+            conf,
+            text_conf: conf,
+            max_objects: 10,
+            max_text_lines: 10,
+            max_tokens: 160
+          });
+          const optBytes = enc.encode(opts + "\\0");
+          const optPtr = Module._malloc(optBytes.length);
+          Module.HEAPU8.set(optBytes, optPtr);
+
+          const outCap = 1024 * 1024;
+          const outPtr = Module._malloc(outCap);
+          const rc = Module._cactus_describe(rgbPtr, width, height, optPtr, 0, 0, outPtr, outCap);
+
+          let outJson = null;
+          let err = null;
+          if (rc < 0) {
+            err = Module.UTF8ToString(Module._cactus_last_error());
+          } else {
+            outJson = JSON.parse(Module.UTF8ToString(outPtr));
+          }
+          Module._free(rgbPtr);
+          Module._free(optPtr);
+          Module._free(outPtr);
+
+          postMessage({
+            type: "result",
+            ms: Math.round(performance.now() - t0),
+            data: outJson,
+            error: err
+          });
+        }
+      };
+    `;
+
+    const worker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" })));
+
+    worker.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.type === "progress") {
+        progressWrap.style.display = "block";
+        progressFill.style.width = msg.pct + "%";
+        progressLabel.textContent = msg.label;
+        setStatus("busy", msg.label);
+      } else if (msg.type === "ready") {
+        modelReady = true;
+        progressWrap.style.display = "none";
+        setStatus("ready", "Mirage ready (21.6 MB)");
+        snapBtn.disabled = sourceMode === "none";
+        if (sourceMode === "camera" && liveMode) scheduleNextFrame();
+        if (sourceMode === "image") runInference();
+      } else if (msg.type === "error") {
+        setStatus("err", "Model load failed");
+        showError("Could not load Mirage WASM/weights: " + msg.error + ". If viewing inside a restricted iframe, open this HTML file directly in Chrome/Safari.");
+      } else if (msg.type === "result") {
+        inferring = false;
+        if (msg.error) {
+          setStatus("err", "Inference error");
+          showError(msg.error);
+        } else {
+          lastResult = msg.data;
+          setStatus("ready", sourceMode === "camera" && liveMode ? "Live (" + msg.ms + " ms)" : "Done (" + msg.ms + " ms)");
+          renderResult(msg.data, msg.ms);
+        }
+        if (sourceMode === "camera" && liveMode && modelReady) {
+          requestAnimationFrame(scheduleNextFrame);
+        }
+      }
+    };
+
+    worker.postMessage({
+      type: "init",
+      jsUrl: CACTUS_JS_URL,
+      wasmUrl: CACTUS_WASM_URL,
+      cactUrl: MIRAGE_CACT_URL
+    });
+
+    function getSourceElement() {
+      return sourceMode === "camera" ? video : sourceMode === "image" ? stillImg : null;
+    }
+
+    function getSourceDims(el) {
+      if (!el) return { w: 0, h: 0 };
+      if (el === video) return { w: video.videoWidth, h: video.videoHeight };
+      return { w: el.naturalWidth, h: el.naturalHeight };
+    }
+
+    function scheduleNextFrame() {
+      if (!modelReady || inferring || sourceMode !== "camera" || !liveMode) return;
+      if (video.readyState >= 2) runInference();
+      else setTimeout(scheduleNextFrame, 100);
+    }
+
+    function runInference() {
+      const el = getSourceElement();
+      const { w: sw, h: sh } = getSourceDims(el);
+      if (!modelReady || inferring || !sw || !sh) return;
+
+      // Downscale to max 512px (Mirage's native stem resolution) for fast WASM transfer
+      const maxDim = 512;
+      const scale = Math.min(1, maxDim / Math.max(sw, sh));
+      const w = Math.max(1, Math.round(sw * scale));
+      const h = Math.max(1, Math.round(sh * scale));
+
+      capCanvas.width = w;
+      capCanvas.height = h;
+      capCtx.drawImage(el, 0, 0, w, h);
+      const rgba = capCtx.getImageData(0, 0, w, h).data;
+      const rgb = new Uint8Array(w * h * 3);
+      for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+        rgb[j] = rgba[i];
+        rgb[j + 1] = rgba[i + 1];
+        rgb[j + 2] = rgba[i + 2];
+      }
+
+      inferring = true;
+      setStatus("busy", "Analyzing…");
+      worker.postMessage({
+        type: "describe",
+        rgb: rgb.buffer,
+        width: w,
+        height: h,
+        conf: parseFloat(confRange.value)
+      }, [rgb.buffer]);
+    }
+
+    function computeContainRect(cw, ch, sw, sh) {
+      const scale = Math.min(cw / sw, ch / sh);
+      const dw = sw * scale;
+      const dh = sh * scale;
+      return { x: (cw - dw) / 2, y: (ch - dh) / 2, w: dw, h: dh };
+    }
+
+    function drawOverlay() {
+      const rect = overlay.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      overlay.width = Math.round(rect.width * dpr);
+      overlay.height = Math.round(rect.height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      const el = getSourceElement();
+      const { w: sw, h: sh } = getSourceDims(el);
+      if (!lastResult || !sw || !sh) return;
+
+      const box = computeContainRect(rect.width, rect.height, sw, sh);
+      const mapX = (nx) => box.x + (nx / 1000) * box.w;
+      const mapY = (ny) => box.y + (ny / 1000) * box.h;
+
+      const objs = lastResult.objects || [];
+      objs.forEach((obj, idx) => {
+        const color = PALETTE[idx % PALETTE.length];
+        if (chkMasks.checked && obj.mask && obj.mask.length >= 6) {
+          const polys = Array.isArray(obj.mask[0]) ? obj.mask : [obj.mask];
+          ctx.save();
+          ctx.fillStyle = color + "38";
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          for (const poly of polys) {
+            if (poly.length < 6) continue;
+            ctx.beginPath();
+            ctx.moveTo(mapX(poly[0]), mapY(poly[1]));
+            for (let i = 2; i < poly.length; i += 2) {
+              ctx.lineTo(mapX(poly[i]), mapY(poly[i + 1]));
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        if (chkBoxes.checked && obj.bbox && obj.bbox.length === 4) {
+          const [x1, y1, x2, y2] = obj.bbox;
+          const rx = mapX(x1), ry = mapY(y1);
+          const rw = mapX(x2) - rx, rh = mapY(y2) - ry;
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(rx, ry, rw, rh);
+
+          const label = `${obj.name || "object"} ${obj.score != null ? Math.round(obj.score * 100) + "%" : ""}`;
+          ctx.font = "600 12px -apple-system, BlinkMacSystemFont, sans-serif";
+          const tw = ctx.measureText(label).width;
+          const ly = ry > 22 ? ry - 20 : ry + 2;
+          ctx.fillStyle = color;
+          ctx.fillRect(rx, ly, tw + 10, 18);
+          ctx.fillStyle = "#050709";
+          ctx.fillText(label, rx + 5, ly + 13);
+        }
+      });
+
+      if (chkText.checked && Array.isArray(lastResult.text)) {
+        lastResult.text.forEach((t) => {
+          if (!t.bbox || t.bbox.length !== 4) return;
+          const [x1, y1, x2, y2] = t.bbox;
+          const rx = mapX(x1), ry = mapY(y1);
+          const rw = mapX(x2) - rx, rh = mapY(y2) - ry;
+          ctx.strokeStyle = "#fde047";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.setLineDash([]);
+          if (t.text) {
+            ctx.font = "600 11px ui-monospace, monospace";
+            const tw = ctx.measureText(t.text).width;
+            ctx.fillStyle = "rgba(10, 12, 16, 0.85)";
+            ctx.fillRect(rx, ry + rh + 2, tw + 8, 16);
+            ctx.fillStyle = "#fde047";
+            ctx.fillText(t.text, rx + 4, ry + rh + 13);
+          }
+        });
+      }
+    }
+
+    function renderResult(data, ms) {
+      drawOverlay();
+      $("latencyMetric").textContent = ms + " ms";
+
+      const scene = data.scene || {};
+      const sceneParts = Object.entries(scene).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`);
+      $("sceneBox").textContent = data.description || (sceneParts.length ? sceneParts.join(" · ") : "No scene summary");
+
+      const objs = data.objects || [];
+      $("objCount").textContent = String(objs.length);
+      $("objectsList").innerHTML = objs.length
+        ? objs.map((o, i) => {
+            const c = PALETTE[i % PALETTE.length];
+            const pct = o.score != null ? Math.round(o.score * 100) + "%" : "";
+            return `<span class="chip"><span class="swatch" style="background:${c}"></span>${escapeHtml(o.name || "object")} <span class="score">${pct}</span></span>`;
+          }).join("")
+        : `<span style="font-size:12px;color:var(--muted)">No objects above threshold</span>`;
+
+      const texts = data.text || [];
+      $("textCount").textContent = String(texts.length);
+      $("textList").innerHTML = texts.length
+        ? texts.map((t) => `<div class="ocr-item"><span>${escapeHtml(t.text || "")}</span><span class="score">${t.score != null ? Math.round(t.score * 100) + "%" : ""}</span></div>`).join("")
+        : `<span style="font-size:12px;color:var(--muted)">No text detected</span>`;
+
+      $("jsonOut").textContent = JSON.stringify(data, null, 2);
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    async function startCamera() {
+      stopCamera();
+      errorBanner.style.display = "none";
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        sourceMode = "camera";
+        emptyState.style.display = "none";
+        stillImg.style.display = "none";
+        video.style.display = "block";
+        camBtn.textContent = "Stop Camera";
+        camBtn.classList.remove("primary");
+        flipBtn.disabled = false;
+        liveBtn.disabled = false;
+        snapBtn.disabled = !modelReady;
+        if (modelReady && liveMode) scheduleNextFrame();
+      } catch (err) {
+        showError("Camera access denied or unavailable: " + err.message + ". You can still upload an image.");
+      }
+    }
+
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      if (sourceMode === "camera") {
+        sourceMode = "none";
+        video.style.display = "none";
+        emptyState.style.display = "block";
+        camBtn.textContent = "Start Camera";
+        camBtn.classList.add("primary");
+        flipBtn.disabled = true;
+        liveBtn.disabled = true;
+        snapBtn.disabled = true;
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+      }
+    }
+
+    camBtn.addEventListener("click", () => {
+      if (stream) stopCamera();
+      else startCamera();
+    });
+
+    flipBtn.addEventListener("click", () => {
+      facingMode = facingMode === "environment" ? "user" : "environment";
+      startCamera();
+    });
+
+    liveBtn.addEventListener("click", () => {
+      liveMode = !liveMode;
+      liveBtn.textContent = liveMode ? "Live: ON" : "Live: OFF";
+      liveBtn.classList.toggle("active", liveMode);
+      if (liveMode && sourceMode === "camera" && modelReady) scheduleNextFrame();
+    });
+
+    snapBtn.addEventListener("click", () => {
+      if (modelReady && sourceMode !== "none") runInference();
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      stopCamera();
+      const url = URL.createObjectURL(file);
+      stillImg.onload = () => {
+        sourceMode = "image";
+        emptyState.style.display = "none";
+        video.style.display = "none";
+        stillImg.style.display = "block";
+        snapBtn.disabled = !modelReady;
+        if (modelReady) runInference();
+      };
+      stillImg.src = url;
+    });
+
+    [chkBoxes, chkMasks, chkText].forEach((el) => el.addEventListener("change", drawOverlay));
+    confRange.addEventListener("input", () => {
+      confVal.textContent = parseFloat(confRange.value).toFixed(2);
+    });
+    confRange.addEventListener("change", () => {
+      if (sourceMode === "image" && modelReady) runInference();
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText($("jsonOut").textContent);
+        copyBtn.textContent = "Copied";
+        setTimeout(() => (copyBtn.textContent = "Copy"), 1200);
+      } catch {}
+    });
+
+    window.addEventListener("resize", drawOverlay);
+  </script>
+</body>
+</html>
