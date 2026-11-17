@@ -170,9 +170,65 @@
 
     .progress-wrap {
       width: 100%;
-      max-width: 300px;
-      margin: 12px auto 0;
-      display: none;
+      max-width: 360px;
+      margin: 16px auto 0;
+      padding: 14px 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      text-align: left;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+
+    .viewport-hud {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: calc(100% - 32px);
+      max-width: 380px;
+      z-index: 10;
+      margin: 0;
+      background: rgba(19, 23, 29, 0.92);
+      backdrop-filter: blur(8px);
+    }
+
+    .progress-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .progress-stage {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(245, 158, 11, 0.28);
+      border-top-color: var(--warn);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .progress-pct {
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--accent);
+      font-weight: 600;
     }
 
     .progress-bar {
@@ -195,6 +251,54 @@
       font-family: var(--mono);
       color: var(--muted);
       margin-top: 6px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .setup-steps {
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+
+    .setup-step {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+    }
+
+    .setup-step.active {
+      color: var(--text);
+    }
+
+    .setup-step.done {
+      color: var(--accent);
+    }
+
+    .step-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .step-icon {
+      width: 12px;
+      display: inline-block;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .step-meta {
+      color: var(--muted);
+      font-size: 10px;
     }
 
     /* Controls bar */
@@ -414,8 +518,8 @@
       </div>
     </div>
     <div class="status-pill" id="statusPill">
-      <span class="dot" id="statusDot"></span>
-      <span id="statusText">Initializing…</span>
+      <span class="dot busy" id="statusDot"></span>
+      <span id="statusText">Starting worker…</span>
     </div>
   </header>
 
@@ -433,9 +537,34 @@
             Mirage (51.3M params, 21.6 MB) runs 100% locally in your browser via WebAssembly.
             No video frames ever leave your device.
           </p>
-          <div class="progress-wrap" id="progressWrap">
-            <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-            <div class="progress-label" id="progressLabel">Downloading model…</div>
+        </div>
+
+        <div class="progress-wrap" id="progressWrap">
+          <div class="progress-header">
+            <div class="progress-stage">
+              <span class="spinner" id="setupSpinner"></span>
+              <span id="progressStage">Preparing on-device model…</span>
+            </div>
+            <span class="progress-pct" id="progressPct">0%</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+          <div class="progress-label">
+            <span id="progressLabel">Connecting to Hugging Face CDN…</span>
+            <span id="progressRate"></span>
+          </div>
+          <div class="setup-steps">
+            <div class="setup-step active" id="stepDownload">
+              <span class="step-left"><span class="step-icon" id="iconDownload">›</span> 1. Download WASM &amp; 2-bit weights</span>
+              <span class="step-meta" id="metaDownload">0.0 / 23.1 MB</span>
+            </div>
+            <div class="setup-step" id="stepCompile">
+              <span class="step-left"><span class="step-icon" id="iconCompile">·</span> 2. Compile WebAssembly runtime</span>
+              <span class="step-meta" id="metaCompile">waiting</span>
+            </div>
+            <div class="setup-step" id="stepLoad">
+              <span class="step-left"><span class="step-icon" id="iconLoad">·</span> 3. Unpack Mirage weights into RAM</span>
+              <span class="step-meta" id="metaLoad">waiting</span>
+            </div>
           </div>
         </div>
       </div>
@@ -470,7 +599,7 @@
           <span class="section-title">Scene</span>
           <span class="metric" id="latencyMetric">—</span>
         </div>
-        <div class="scene-box" id="sceneBox">Waiting for model &amp; frame…</div>
+        <div class="scene-box" id="sceneBox">Downloading &amp; initializing Mirage model…</div>
       </div>
 
       <div class="section">
@@ -513,8 +642,11 @@
     const ctx = overlay.getContext("2d");
     const emptyState = $("emptyState");
     const progressWrap = $("progressWrap");
+    const progressStage = $("progressStage");
+    const progressPct = $("progressPct");
     const progressFill = $("progressFill");
     const progressLabel = $("progressLabel");
+    const progressRate = $("progressRate");
     const statusDot = $("statusDot");
     const statusText = $("statusText");
     const errorBanner = $("errorBanner");
@@ -552,58 +684,177 @@
       errorBanner.textContent = msg;
     }
 
+    function setStepState(stepId, iconId, metaId, state, metaText) {
+      const stepEl = $(stepId);
+      const iconEl = $(iconId);
+      const metaEl = $(metaId);
+      stepEl.className = "setup-step" + (state ? " " + state : "");
+      iconEl.textContent = state === "done" ? "✓" : state === "active" ? "›" : "·";
+      if (metaText != null) metaEl.textContent = metaText;
+    }
+
+    function syncProgressLayout() {
+      if (modelReady) {
+        progressWrap.style.display = "none";
+        return;
+      }
+      progressWrap.style.display = "block";
+      if (sourceMode === "none") {
+        progressWrap.classList.remove("viewport-hud");
+        emptyState.appendChild(progressWrap);
+      } else {
+        progressWrap.classList.add("viewport-hud");
+        $("viewport").appendChild(progressWrap);
+      }
+    }
+
+    syncProgressLayout();
+
     // Inline Web Worker so the entire app stays a single HTML file
     const workerCode = `
       let Module = null;
       const enc = new TextEncoder();
+      const pause = (ms = 15) => new Promise((r) => setTimeout(r, ms));
 
-      async function fetchCached(url, label) {
+      async function fetchAllCached(assets) {
         let cache = null;
         try { cache = await caches.open("mirage-wasm-v1"); } catch {}
-        if (cache) {
-          const hit = await cache.match(url);
-          if (hit) {
-            postMessage({ type: "progress", label: label + " (cached)", pct: 100 });
-            return await hit.arrayBuffer();
+
+        const state = assets.map((a) => ({
+          ...a,
+          received: 0,
+          total: a.estBytes,
+          cached: false,
+          done: false
+        }));
+
+        const t0 = performance.now();
+        let lastPost = 0;
+
+        function report(force) {
+          const now = performance.now();
+          if (!force && now - lastPost < 60) return;
+          lastPost = now;
+
+          const receivedBytes = state.reduce((s, x) => s + x.received, 0);
+          const totalBytes = state.reduce((s, x) => s + x.total, 0);
+          const dlPct = totalBytes > 0 ? Math.min(100, Math.round((receivedBytes / totalBytes) * 100)) : 0;
+          const overallPct = Math.round(dlPct * 0.82); // Reserve 82..100% for compile & weight load
+          const elapsedSec = Math.max(0.1, (now - t0) / 1000);
+          const allCached = state.every((x) => x.cached);
+
+          const active = state.find((x) => !x.done) || state[state.length - 1];
+          const recMB = (receivedBytes / 1048576).toFixed(1);
+          const totMB = (totalBytes / 1048576).toFixed(1);
+          const speedMBs = allCached ? null : (receivedBytes / 1048576 / elapsedSec).toFixed(1);
+
+          postMessage({
+            type: "setup",
+            phase: "download",
+            stage: allCached ? "Loaded model from browser cache" : "Downloading " + active.label + "…",
+            detail: allCached ? "Cached locally (" + totMB + " MB)" : active.label + " · " + recMB + " / " + totMB + " MB",
+            rate: speedMBs ? speedMBs + " MB/s" : "",
+            dlMeta: allCached ? "cached (" + totMB + " MB)" : recMB + " / " + totMB + " MB (" + dlPct + "%)",
+            pct: overallPct
+          });
+        }
+
+        report(true);
+
+        const buffers = await Promise.all(state.map(async (item) => {
+          if (cache) {
+            const hit = await cache.match(item.url);
+            if (hit) {
+              const buf = await hit.arrayBuffer();
+              item.total = buf.byteLength;
+              item.received = buf.byteLength;
+              item.cached = true;
+              item.done = true;
+              report(true);
+              return buf;
+            }
           }
-        }
-        const res = await fetch(url);
-        if (!res.ok) throw new Error("HTTP " + res.status + " fetching " + label);
-        const total = Number(res.headers.get("content-length") || 0);
-        const reader = res.body.getReader();
-        const chunks = [];
-        let received = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          received += value.byteLength;
-          if (total > 0) {
-            postMessage({ type: "progress", label: label + " " + (received / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB", pct: Math.round((received / total) * 100) });
+
+          const res = await fetch(item.url);
+          if (!res.ok) throw new Error("HTTP " + res.status + " fetching " + item.label);
+          const len = Number(res.headers.get("content-length") || 0);
+          if (len > 0) item.total = len;
+
+          const reader = res.body.getReader();
+          const chunks = [];
+          let received = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.byteLength;
+            item.received = received;
+            if (received > item.total) item.total = received;
+            report(false);
           }
-        }
-        const buf = new Uint8Array(received);
-        let offset = 0;
-        for (const c of chunks) { buf.set(c, offset); offset += c.byteLength; }
-        if (cache) {
-          try { await cache.put(url, new Response(buf, { headers: { "Content-Type": "application/octet-stream" } })); } catch {}
-        }
-        return buf.buffer;
+
+          const buf = new Uint8Array(received);
+          let offset = 0;
+          for (const c of chunks) { buf.set(c, offset); offset += c.byteLength; }
+          item.total = received;
+          item.received = received;
+          item.done = true;
+          report(true);
+
+          if (cache) {
+            try { await cache.put(item.url, new Response(buf, { headers: { "Content-Type": "application/octet-stream" } })); } catch {}
+          }
+          return buf.buffer;
+        }));
+
+        const totalMB = (state.reduce((s, x) => s + x.received, 0) / 1048576).toFixed(1);
+        const allCached = state.every((x) => x.cached);
+        return { buffers, totalMB, allCached };
       }
 
       self.onmessage = async (e) => {
         const msg = e.data;
         if (msg.type === "init") {
+          const initT0 = performance.now();
           try {
-            postMessage({ type: "progress", label: "Loading WASM engine…", pct: 5 });
-            const [jsBuf, wasmBuf, cactBuf] = await Promise.all([
-              fetchCached(msg.jsUrl, "cactus.js"),
-              fetchCached(msg.wasmUrl, "cactus.wasm"),
-              fetchCached(msg.cactUrl, "mirage.cact")
+            const { buffers, totalMB, allCached } = await fetchAllCached([
+              { url: msg.jsUrl, label: "cactus.js", estBytes: 35000 },
+              { url: msg.wasmUrl, label: "cactus.wasm", estBytes: 1500000 },
+              { url: msg.cactUrl, label: "mirage.cact", estBytes: 21600000 }
             ]);
+            const [jsBuf, wasmBuf, cactBuf] = buffers;
+
+            const compileT0 = performance.now();
+            postMessage({
+              type: "setup",
+              phase: "compile",
+              stage: "Compiling WebAssembly engine…",
+              detail: "Instantiating cactus.wasm (" + (wasmBuf.byteLength / 1048576).toFixed(1) + " MB)",
+              rate: "",
+              dlMeta: (allCached ? "cached · " : "") + totalMB + " MB",
+              compileMeta: "compiling…",
+              pct: 88
+            });
+            await pause(20);
+
             const jsText = new TextDecoder().decode(jsBuf);
             const createCactus = new Function(jsText + "\\nreturn createCactus;")();
             Module = await createCactus({ wasmBinary: new Uint8Array(wasmBuf) });
+            const compileMs = Math.round(performance.now() - compileT0);
+
+            const loadT0 = performance.now();
+            postMessage({
+              type: "setup",
+              phase: "load",
+              stage: "Unpacking Mirage 2-bit weights…",
+              detail: "Initializing 51.3M parameters in WASM memory (" + (cactBuf.byteLength / 1048576).toFixed(1) + " MB)",
+              rate: "",
+              compileMeta: compileMs + " ms",
+              loadMeta: "unpacking…",
+              pct: 95
+            });
+            await pause(25);
+
             const cact = new Uint8Array(cactBuf);
             const ptr = Module._malloc(cact.length);
             Module.HEAPU8.set(cact, ptr);
@@ -612,7 +863,15 @@
             if (rc < 0) {
               throw new Error(Module.UTF8ToString(Module._cactus_last_error()));
             }
-            postMessage({ type: "ready" });
+            const loadMs = Math.round(performance.now() - loadT0);
+            const totalSec = ((performance.now() - initT0) / 1000).toFixed(1);
+
+            postMessage({
+              type: "ready",
+              totalSec,
+              loadMs,
+              allCached
+            });
           } catch (err) {
             postMessage({ type: "error", error: err.message || String(err) });
           }
@@ -663,20 +922,55 @@
 
     worker.onmessage = (e) => {
       const msg = e.data;
-      if (msg.type === "progress") {
-        progressWrap.style.display = "block";
+      if (msg.type === "setup") {
+        syncProgressLayout();
+        progressStage.textContent = msg.stage;
+        progressPct.textContent = msg.pct + "%";
         progressFill.style.width = msg.pct + "%";
-        progressLabel.textContent = msg.label;
-        setStatus("busy", msg.label);
+        progressLabel.textContent = msg.detail || "";
+        progressRate.textContent = msg.rate || "";
+        setStatus("busy", msg.stage + " (" + msg.pct + "%)");
+
+        if (msg.phase === "download") {
+          setStepState("stepDownload", "iconDownload", "metaDownload", "active", msg.dlMeta);
+        } else if (msg.phase === "compile") {
+          setStepState("stepDownload", "iconDownload", "metaDownload", "done", msg.dlMeta);
+          setStepState("stepCompile", "iconCompile", "metaCompile", "active", msg.compileMeta);
+        } else if (msg.phase === "load") {
+          setStepState("stepDownload", "iconDownload", "metaDownload", "done", null);
+          setStepState("stepCompile", "iconCompile", "metaCompile", "done", msg.compileMeta);
+          setStepState("stepLoad", "iconLoad", "metaLoad", "active", msg.loadMeta);
+        }
+
+        if (!lastResult) {
+          const waitSuffix = sourceMode === "camera"
+            ? " Live recognition will start automatically as soon as setup finishes."
+            : sourceMode === "image"
+            ? " Your image will be analyzed automatically once setup finishes."
+            : "";
+          $("sceneBox").textContent = msg.stage + " — " + (msg.detail || "") + "." + waitSuffix;
+        }
       } else if (msg.type === "ready") {
         modelReady = true;
-        progressWrap.style.display = "none";
-        setStatus("ready", "Mirage ready (21.6 MB)");
+        setStepState("stepLoad", "iconLoad", "metaLoad", "done", msg.loadMs + " ms");
+        progressFill.style.width = "100%";
+        progressPct.textContent = "100%";
+        progressStage.textContent = "Mirage model ready!";
+        syncProgressLayout();
+
+        const readyNote = "Mirage ready (" + (msg.allCached ? "cached, " : "") + msg.totalSec + "s)";
+        setStatus("ready", readyNote);
+        if (!lastResult && sourceMode === "none") {
+          $("sceneBox").textContent = "Model loaded and ready. Start the camera or upload an image to begin.";
+        }
         snapBtn.disabled = sourceMode === "none";
         if (sourceMode === "camera" && liveMode) scheduleNextFrame();
         if (sourceMode === "image") runInference();
       } else if (msg.type === "error") {
         setStatus("err", "Model load failed");
+        $("setupSpinner").style.display = "none";
+        progressStage.textContent = "Model setup failed";
+        progressLabel.textContent = msg.error;
         showError("Could not load Mirage WASM/weights: " + msg.error + ". If viewing inside a restricted iframe, open this HTML file directly in Chrome/Safari.");
       } else if (msg.type === "result") {
         inferring = false;
@@ -827,13 +1121,14 @@
           ctx.setLineDash([4, 3]);
           ctx.strokeRect(rx, ry, rw, rh);
           ctx.setLineDash([]);
-          if (t.text) {
+          const str = t.string ?? t.text ?? "";
+          if (str) {
             ctx.font = "600 11px ui-monospace, monospace";
-            const tw = ctx.measureText(t.text).width;
+            const tw = ctx.measureText(str).width;
             ctx.fillStyle = "rgba(10, 12, 16, 0.85)";
             ctx.fillRect(rx, ry + rh + 2, tw + 8, 16);
             ctx.fillStyle = "#fde047";
-            ctx.fillText(t.text, rx + 4, ry + rh + 13);
+            ctx.fillText(str, rx + 4, ry + rh + 13);
           }
         });
       }
@@ -860,7 +1155,11 @@
       const texts = data.text || [];
       $("textCount").textContent = String(texts.length);
       $("textList").innerHTML = texts.length
-        ? texts.map((t) => `<div class="ocr-item"><span>${escapeHtml(t.text || "")}</span><span class="score">${t.score != null ? Math.round(t.score * 100) + "%" : ""}</span></div>`).join("")
+        ? texts.map((t) => {
+            const str = t.string ?? t.text ?? "";
+            const label = str ? escapeHtml(str) : `<span style="color:var(--muted);font-style:italic">(unreadable region)</span>`;
+            return `<div class="ocr-item"><span>${label}</span><span class="score">${t.score != null ? Math.round(t.score * 100) + "%" : ""}</span></div>`;
+          }).join("")
         : `<span style="font-size:12px;color:var(--muted)">No text detected</span>`;
 
       $("jsonOut").textContent = JSON.stringify(data, null, 2);
@@ -889,7 +1188,12 @@
         flipBtn.disabled = false;
         liveBtn.disabled = false;
         snapBtn.disabled = !modelReady;
-        if (modelReady && liveMode) scheduleNextFrame();
+        syncProgressLayout();
+        if (modelReady && liveMode) {
+          scheduleNextFrame();
+        } else if (!modelReady) {
+          $("sceneBox").textContent = "Camera ready — waiting for Mirage model setup to finish before live recognition starts…";
+        }
       } catch (err) {
         showError("Camera access denied or unavailable: " + err.message + ". You can still upload an image.");
       }
@@ -910,6 +1214,7 @@
         liveBtn.disabled = true;
         snapBtn.disabled = true;
         ctx.clearRect(0, 0, overlay.width, overlay.height);
+        syncProgressLayout();
       }
     }
 
@@ -945,7 +1250,12 @@
         video.style.display = "none";
         stillImg.style.display = "block";
         snapBtn.disabled = !modelReady;
-        if (modelReady) runInference();
+        syncProgressLayout();
+        if (modelReady) {
+          runInference();
+        } else {
+          $("sceneBox").textContent = "Image loaded — waiting for Mirage model setup to finish before analyzing…";
+        }
       };
       stillImg.src = url;
     });
