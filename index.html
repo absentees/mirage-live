@@ -83,6 +83,14 @@
       object-fit: contain;
     }
 
+    #stillImg.frozen-camera {
+      object-fit: cover;
+    }
+
+    #stillImg.frozen-camera.fit-contain {
+      object-fit: contain;
+    }
+
     #overlay {
       position: absolute;
       inset: 0;
@@ -1392,12 +1400,15 @@
 
     const ICON_CAMERA = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.5"/></svg>`;
     const ICON_PAUSE = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>`;
+    const ICON_RETAKE = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
 
     let stream = null;
     let facingMode = "environment";
     let modelReady = false;
     let inferring = false;
     let liveMode = true;
+    let frozenShot = false;
+    let frozenBlobUrl = null;
     let videoFitContain = false;
     let lastResult = null;
     let sourceMode = "none"; // "camera" | "image"
@@ -1413,6 +1424,8 @@
 
     const capCanvas = document.createElement("canvas");
     const capCtx = capCanvas.getContext("2d", { willReadFrequently: true });
+    const snapCanvas = document.createElement("canvas");
+    const snapCtx = snapCanvas.getContext("2d");
 
     function setStatus(state, text) {
       statusDot.className = "dot " + (state || "");
@@ -1472,9 +1485,12 @@
       } else if (sourceMode === "camera" && liveMode) {
         shutterCore.innerHTML = ICON_PAUSE;
         shutterBtn.setAttribute("aria-label", "Pause live scanning");
+      } else if (sourceMode === "camera" && frozenShot) {
+        shutterCore.innerHTML = ICON_RETAKE;
+        shutterBtn.setAttribute("aria-label", "Return to camera viewfinder");
       } else {
         shutterCore.innerHTML = "";
-        shutterBtn.setAttribute("aria-label", "Scan once");
+        shutterBtn.setAttribute("aria-label", "Capture and scan");
       }
 
       if (sourceMode === "camera") {
@@ -1689,14 +1705,14 @@
     }
 
     viewport.addEventListener("touchstart", (e) => {
-      if (sourceMode === "camera" && e.touches.length === 2) {
+      if (sourceMode === "camera" && !frozenShot && e.touches.length === 2) {
         pinchStartDist = touchDist(e.touches[0], e.touches[1]);
         pinchStartZoom = zoomLevel;
       }
     }, { passive: true });
 
     viewport.addEventListener("touchmove", (e) => {
-      if (sourceMode === "camera" && e.touches.length === 2 && pinchStartDist > 0) {
+      if (sourceMode === "camera" && !frozenShot && e.touches.length === 2 && pinchStartDist > 0) {
         const dist = touchDist(e.touches[0], e.touches[1]);
         applyZoom(pinchStartZoom * (dist / pinchStartDist));
       }
@@ -1708,7 +1724,7 @@
 
     // Trackpad pinch / Ctrl+wheel zoom on desktop
     viewport.addEventListener("wheel", (e) => {
-      if (sourceMode !== "camera") return;
+      if (sourceMode !== "camera" || frozenShot) return;
       if (e.ctrlKey || Math.abs(e.deltaY) > 0) {
         e.preventDefault();
         const delta = -e.deltaY * 0.004;
@@ -1976,8 +1992,8 @@
           scenePillText.textContent = "Model ready · tap shutter to start";
         }
         snapBtn.disabled = sourceMode === "none";
-        if (sourceMode === "camera" && liveMode) scheduleNextFrame();
-        if (sourceMode === "image") runInference();
+        if (sourceMode === "camera" && liveMode && !frozenShot) scheduleNextFrame();
+        if (sourceMode === "image" || frozenShot) runInference();
       } else if (msg.type === "error") {
         setStatus("err", "Model load failed");
         $("setupSpinner").style.display = "none";
@@ -1992,10 +2008,15 @@
           showError(msg.error);
         } else {
           lastResult = msg.data;
-          setStatus("ready", sourceMode === "camera" && liveMode ? "Live · " + msg.ms + " ms" : "Done · " + msg.ms + " ms");
+          const label = sourceMode === "camera" && frozenShot
+            ? "Captured · " + msg.ms + " ms"
+            : sourceMode === "camera" && liveMode
+            ? "Live · " + msg.ms + " ms"
+            : "Done · " + msg.ms + " ms";
+          setStatus("ready", label);
           renderResult(msg.data, msg.ms);
         }
-        if (sourceMode === "camera" && liveMode && modelReady) {
+        if (sourceMode === "camera" && liveMode && !frozenShot && modelReady) {
           requestAnimationFrame(scheduleNextFrame);
         }
       }
@@ -2009,7 +2030,8 @@
     });
 
     function getSourceElement() {
-      return sourceMode === "camera" ? video : sourceMode === "image" ? stillImg : null;
+      if (sourceMode === "camera") return frozenShot ? stillImg : video;
+      return sourceMode === "image" ? stillImg : null;
     }
 
     function getSourceDims(el) {
@@ -2019,7 +2041,7 @@
     }
 
     function scheduleNextFrame() {
-      if (!modelReady || inferring || sourceMode !== "camera" || !liveMode) return;
+      if (!modelReady || inferring || sourceMode !== "camera" || !liveMode || frozenShot) return;
       if (video.readyState >= 2) runInference();
       else setTimeout(scheduleNextFrame, 100);
     }
@@ -2030,7 +2052,7 @@
       if (!modelReady || inferring || !sw || !sh) return;
 
       // If using digital zoom on live video, crop centered 1/zoomLevel region so Mirage sees the zoomed view
-      const useDigitalCrop = sourceMode === "camera" && !hardwareZoom && zoomLevel > 1.005;
+      const useDigitalCrop = sourceMode === "camera" && !frozenShot && !hardwareZoom && zoomLevel > 1.005;
       const cropW = useDigitalCrop ? sw / zoomLevel : sw;
       const cropH = useDigitalCrop ? sh / zoomLevel : sh;
       const sx = useDigitalCrop ? (sw - cropW) / 2 : 0;
@@ -2243,14 +2265,81 @@
       }
     }
 
+    function clearFrozenShot() {
+      frozenShot = false;
+      stillImg.classList.remove("frozen-camera", "fit-contain");
+      if (frozenBlobUrl) {
+        URL.revokeObjectURL(frozenBlobUrl);
+        frozenBlobUrl = null;
+      }
+    }
+
+    function captureSingleFrame() {
+      if (sourceMode !== "camera" || frozenShot || video.readyState < 2) return;
+      const sw = video.videoWidth;
+      const sh = video.videoHeight;
+      if (!sw || !sh) return;
+
+      const useDigitalCrop = !hardwareZoom && zoomLevel > 1.005;
+      const cropW = useDigitalCrop ? sw / zoomLevel : sw;
+      const cropH = useDigitalCrop ? sh / zoomLevel : sh;
+      const sx = useDigitalCrop ? (sw - cropW) / 2 : 0;
+      const sy = useDigitalCrop ? (sh - cropH) / 2 : 0;
+
+      snapCanvas.width = Math.max(1, Math.round(cropW));
+      snapCanvas.height = Math.max(1, Math.round(cropH));
+      snapCtx.drawImage(video, sx, sy, cropW, cropH, 0, 0, snapCanvas.width, snapCanvas.height);
+
+      snapCanvas.toBlob((blob) => {
+        if (!blob || sourceMode !== "camera") return;
+        if (frozenBlobUrl) URL.revokeObjectURL(frozenBlobUrl);
+        frozenBlobUrl = URL.createObjectURL(blob);
+        stillImg.onload = () => {
+          frozenShot = true;
+          stillImg.classList.add("frozen-camera");
+          stillImg.classList.toggle("fit-contain", videoFitContain);
+          video.pause();
+          video.style.display = "none";
+          stillImg.style.display = "block";
+          zoomBar.classList.remove("visible");
+          zoomSliderRow.classList.add("hidden");
+          syncShutterUI();
+          if (modelReady) {
+            runInference();
+          } else {
+            setStatus("busy", "Captured · waiting for model…");
+          }
+        };
+        stillImg.src = frozenBlobUrl;
+      }, "image/jpeg", 0.92);
+    }
+
+    function unfreezeCamera() {
+      if (!frozenShot || sourceMode !== "camera") return;
+      clearFrozenShot();
+      stillImg.style.display = "none";
+      video.style.display = "block";
+      video.play().catch(() => {});
+      lastResult = null;
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      zoomBar.classList.add("visible");
+      zoomSliderRow.classList.remove("hidden");
+      syncShutterUI();
+      if (!liveMode && modelReady && !inferring) {
+        setStatus("ready", "Single mode");
+      }
+    }
+
     function stopCamera() {
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
         stream = null;
       }
       if (sourceMode === "camera") {
+        clearFrozenShot();
         sourceMode = "none";
         video.style.display = "none";
+        stillImg.style.display = "none";
         emptyState.style.display = "block";
         flipBtn.disabled = true;
         snapBtn.disabled = true;
@@ -2263,10 +2352,13 @@
 
     function setLiveMode(nextLive) {
       liveMode = nextLive;
+      if (liveMode && frozenShot) {
+        unfreezeCamera();
+      }
       syncShutterUI();
       if (liveMode && sourceMode === "camera" && modelReady) {
         scheduleNextFrame();
-      } else if (!liveMode && sourceMode === "camera" && modelReady && !inferring) {
+      } else if (!liveMode && sourceMode === "camera" && !frozenShot && modelReady && !inferring) {
         setStatus("ready", "Single mode");
       }
     }
@@ -2281,6 +2373,9 @@
         startCamera();
       } else if (sourceMode === "camera" && liveMode) {
         setLiveMode(false);
+      } else if (sourceMode === "camera" && !liveMode) {
+        if (frozenShot) unfreezeCamera();
+        else captureSingleFrame();
       } else if (modelReady) {
         runInference();
       }
@@ -2295,12 +2390,17 @@
     });
 
     snapBtn.addEventListener("click", () => {
-      if (modelReady && sourceMode !== "none") runInference();
+      if (sourceMode === "camera" && !liveMode && !frozenShot) {
+        captureSingleFrame();
+      } else if (modelReady && sourceMode !== "none") {
+        runInference();
+      }
     });
 
     fitBtn.addEventListener("click", () => {
       videoFitContain = !videoFitContain;
       video.classList.toggle("fit-contain", videoFitContain);
+      if (frozenShot) stillImg.classList.toggle("fit-contain", videoFitContain);
       fitBtn.textContent = videoFitContain ? "View: Fit" : "View: Fill";
       drawOverlay();
     });
@@ -2309,6 +2409,7 @@
       const file = e.target.files?.[0];
       if (!file) return;
       stopCamera();
+      clearFrozenShot();
       const url = URL.createObjectURL(file);
       stillImg.onload = () => {
         sourceMode = "image";
@@ -2338,7 +2439,7 @@
       confVal.textContent = parseFloat(confRange.value).toFixed(2);
     });
     confRange.addEventListener("change", () => {
-      if (sourceMode === "image" && modelReady) runInference();
+      if ((sourceMode === "image" || frozenShot) && modelReady) runInference();
     });
 
     copyBtn.addEventListener("click", async () => {
